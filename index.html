@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Scrap MVP Prototype</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar" aria-label="Scrap">
+      <a class="brand" href="#" aria-label="Scrap home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Scrap</span>
+      </a>
+      <nav class="nav" aria-label="Sections">
+        <button class="nav-button is-active" data-view="scrapbook">Museum</button>
+        <button class="nav-button" data-view="activity">Activity</button>
+      </nav>
+    </header>
+
+    <main>
+      <section class="view is-visible" id="scrapbookView" aria-label="Scrapbook">
+        <div class="canvas" id="canvas" aria-live="polite"></div>
+      </section>
+
+      <section class="view" id="activityView" aria-label="Processing activity">
+        <div class="activity-shell">
+          <div>
+            <p class="section-kicker">Background work</p>
+            <h1>Saved scraps keep resolving after you close the share sheet.</h1>
+          </div>
+          <form class="capture-form" id="captureForm">
+            <input id="captureUrl" name="captureUrl" type="url" placeholder="Paste Instagram Reel or post URL" aria-label="Instagram Reel or post URL">
+            <button type="submit">Save</button>
+          </form>
+          <ol class="activity-list" id="activityList"></ol>
+        </div>
+      </section>
+    </main>
+
+    <div class="sheet" id="mobileSheet" aria-hidden="true">
+      <button class="sheet-close" id="sheetClose" aria-label="Close product details">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+      <div id="sheetContent"></div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
