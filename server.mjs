@@ -5,7 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const port = Number(process.env.PORT || 8787);
-const openAiModel = process.env.OPENAI_VLM_MODEL || "gpt-5.6-terra";
+const metaBaseUrl = process.env.META_BASE_URL || "https://api.meta.ai/v1";
+const metaModel = process.env.META_VLM_MODEL || "muse-spark-1.1";
 const jobs = new Map();
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const jobsFile = path.join(projectRoot, ".scrap-jobs.json");
@@ -94,8 +95,8 @@ async function fetchSourceContext(sourceUrl) {
 }
 
 async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
-  if (!process.env.OPENAI_API_KEY) {
-    return { products: [], reason: "OPENAI_API_KEY is not configured" };
+  if (!process.env.META) {
+    return { products: [], reason: "META is not configured" };
   }
 
   const evidence = [
@@ -111,14 +112,15 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
     ...(mediaUrls || []).slice(0, 8).map((image_url) => ({ type: "input_image", image_url }))
   ];
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch(`${metaBaseUrl}/responses`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      authorization: `Bearer ${process.env.META}`,
       "content-type": "application/json"
     },
     body: JSON.stringify({
-      model: openAiModel,
+      model: metaModel,
+      max_output_tokens: 4096,
       input: [{ role: "user", content }],
       text: {
         format: {
@@ -306,7 +308,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type" });
     return res.end();
   }
-  if (req.method === "GET" && req.url === "/api/health") return json(res, 200, { ok: true, model: openAiModel });
+  if (req.method === "GET" && req.url === "/api/health") return json(res, 200, { ok: true, model: metaModel, provider: "meta" });
   if (req.method === "POST" && req.url === "/api/scraps") {
     try {
       const input = await readBody(req);
