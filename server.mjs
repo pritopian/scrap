@@ -85,9 +85,22 @@ async function fetchSourceContext(sourceUrl) {
     const imageUrl = (metaValue(html, "og:image") || metaValue(html, "twitter:image")).replace(/&amp;/g, "&");
     const title = metaValue(html, "og:title");
     const description = metaValue(html, "og:description");
+    let mediaUrls = [];
+    if (imageUrl) {
+      try {
+        const imageResponse = await fetch(imageUrl, { headers: { "user-agent": "Mozilla/5.0", accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8" } });
+        if (imageResponse.ok) {
+          const mimeType = imageResponse.headers.get("content-type")?.split(";")[0] || "image/jpeg";
+          const imageData = Buffer.from(await imageResponse.arrayBuffer()).toString("base64");
+          mediaUrls = [`data:${mimeType};base64,${imageData}`];
+        }
+      } catch {
+        // Muse receives text-only evidence when the social preview image is unavailable.
+      }
+    }
     return {
       text: [title, description, cleanText(html)].filter(Boolean).join("\n\n"),
-      mediaUrls: imageUrl ? [imageUrl] : []
+      mediaUrls
     };
   } catch {
     return { text: "", mediaUrls: [] };
@@ -152,7 +165,10 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
       }
     })
   });
-  if (!response.ok) throw new Error(`OpenAI request failed: ${response.status}`);
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 800);
+    throw new Error(`Meta request failed: ${response.status} ${detail}`);
+  }
   const payload = await response.json();
   const outputText = payload.output_text || payload.output
     ?.flatMap((item) => item.content || [])
