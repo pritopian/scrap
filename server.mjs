@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const port = Number(process.env.PORT || 8787);
 const metaBaseUrl = process.env.META_BASE_URL || "https://api.meta.ai/v1";
 const metaModel = process.env.META_VLM_MODEL || "muse-spark-1.1";
-const JOB_SCHEMA_VERSION = 2;
+const JOB_SCHEMA_VERSION = 3;
 const jobs = new Map();
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const jobsFile = path.join(projectRoot, ".scrap-jobs.json");
@@ -129,7 +129,7 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
   const content = [
     {
       type: "input_text",
-      text: `${evidence}\n\nSeparate brand recognition from product identification. Return every clearly supported brand in brands, even if no specific product can be named. Return a product only when the exact product name is readable or explicitly spoken, or when a product label/packaging clearly identifies that exact item. A brand logo alone is brand evidence, not product evidence. A visual category such as bag, shoe, dress, or accessory is not a product name. A caption can mention a theme or comparison brand without being the brand of every item shown. Do not guess, infer, or search for products from a brand, aesthetic, silhouette, or generic description. For product evidence_type use only explicit_product_name or product_label. If no exact product is supported, return products as an empty array. Return only JSON matching the requested schema.`
+      text: `${evidence}\n\nSeparate brand recognition from product identification. Return every clearly supported brand in brands, even if no specific product can be named. Return a product only when the exact product name is readable or explicitly spoken, or when a product label/packaging clearly identifies that exact item. A brand logo alone is brand evidence, not product evidence. A visual category such as bag, shoe, dress, or accessory is not a product name. A caption can mention a theme or comparison brand without being the brand of every item shown. Do not guess, infer, or search for exact products from a brand, aesthetic, silhouette, or generic description. For visual_products, return at most two clearly visible clothing items for visual search. Describe only observable attributes such as clothing type, color, material, pattern, and distinctive details. Do not assign an exact product name. Only include clothing, not bags, shoes, jewelry, or general mood. For product evidence_type use only explicit_product_name or product_label. If no exact product is supported, return products as an empty array. Return only JSON matching the requested schema.`
     },
     ...(mediaUrls || []).slice(0, 8).map((image_url) => ({ type: "input_image", image_url }))
   ];
@@ -165,6 +165,21 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
                   additionalProperties: false
                 }
               },
+              visual_products: {
+                type: "array",
+                maxItems: 2,
+                items: {
+                  type: "object",
+                  properties: {
+                    brand: { type: "string" },
+                    description: { type: "string" },
+                    evidence: { type: "string" },
+                    category: { type: "string", enum: ["top", "bottom", "dress", "jacket", "coat", "other clothing"] }
+                  },
+                  required: ["brand", "description", "evidence", "category"],
+                  additionalProperties: false
+                }
+              },
               products: {
                 type: "array",
                 items: {
@@ -180,7 +195,7 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
                 }
               }
             },
-            required: ["brands", "products"],
+            required: ["brands", "visual_products", "products"],
             additionalProperties: false
           }
         }
@@ -197,21 +212,17 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
     .filter((item) => item.type === "output_text")
     .map((item) => item.text)
     .join("");
-  return JSON.parse(outputText || '{"brands":[],"products":[]}');
+  return JSON.parse(outputText || '{"brands":[],"visual_products":[],"products":[]}');
 }
 
-async function searchOfficialProduct({ brand, productName, product_name }) {
+async function searchExa(query) {
   if (!process.env.EXA_API_KEY) return null;
-  const resolvedProductName = productName || product_name;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const response = await fetch("https://api.exa.ai/search", {
       method: "POST",
-      headers: {
-        "x-api-key": process.env.EXA_API_KEY,
-        "content-type": "application/json"
-      },
+      headers: { "x-api-key": process.env.EXA_API_KEY, "content-type": "application/json" },
       body: JSON.stringify({
-        query: `${brand} ${resolvedProductName} official product page price`,
+        query,
         type: "auto",
         numResults: 5,
         contents: { text: { maxCharacters: 4000 }, highlights: { maxCharacters: 1200 } }
@@ -219,14 +230,59 @@ async function searchOfficialProduct({ brand, productName, product_name }) {
     });
     if (response.ok) {
       const payload = await response.json();
-      const result = payload.results?.find((item) => item.url) || null;
-      const image = typeof result.image === "string" ? result.image : result.image?.url || result.image?.src || "";
-      return result ? { url: result.url, title: result.title || "", text: result.text || "", image, highlights: result.highlights || [] } : null;
+      return payload.results?.find((item) => item.url) || null;
     }
     if (response.status !== 429 || attempt === 2) throw new Error(`Exa request failed: ${response.status}`);
     await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
   }
   return null;
+}
+
+async function searchBrandHomepage(brand) {
+  const result = await searchExa(`${brand} official website homepage`);
+  if (!result || /instagram|facebook|tiktok|youtube|pinterest/i.test(result.url)) return null;
+  return { name: brand, url: result.url, title: result.title || "" };
+}
+
+async function searchOfficialProduct({ brand, productName, product_name }) {
+  if (!process.env.EXA_API_KEY) return null;
+  const resolvedProductName = productName || product_name;
+  const result = await searchExa(`${brand} ${resolvedProductName} official product page price`);
+  const image = typeof result?.image === "string" ? result.image : result?.image?.url || result?.image?.src || "";
+  return result ? { url: result.url, title: result.title || "", text: result.text || "", image, highlights: result.highlights || [] } : null;
+}
+
+async function resolveVisualProduct(candidate) {
+  const brand = normalizeModelText(candidate.brand);
+  const description = normalizeModelText(candidate.description);
+  if (!description) return null;
+  let result;
+  try {
+    result = await searchExa(`${brand ? `${brand} ` : ""}${description} clothing official product`);
+  } catch {
+    return null;
+  }
+  if (!result?.url) return null;
+  const resultImage = typeof result.image === "string" ? result.image : result.image?.url || result.image?.src || "";
+  let product = null;
+  try {
+    const response = await fetch(result.url, { headers: { "user-agent": "Scrap/0.1 (+visual research)" } });
+    if (response.ok) product = extractProductPage(await response.text(), { brand, productName: description, url: result.url });
+  } catch {
+    // Search-result metadata remains a useful visual suggestion when the page blocks reading.
+  }
+  return {
+    name: `Visual match: ${description}`,
+    brand: brand || product?.brand || "Brand not identified",
+    price: product?.price || "Price unavailable",
+    imageUrl: product?.imageUrl || resultImage,
+    url: result.url,
+    evidence: candidate.evidence,
+    evidence_type: "visual_search",
+    status: "review",
+    visualMatch: true,
+    reason: "Visual search suggestion; confirm that this is the item shown in the Reel"
+  };
 }
 
 function extractFromSearchResult(result, candidate) {
@@ -330,6 +386,14 @@ async function processJob(job, input) {
       name: normalizeModelText(brand.name),
       evidence: normalizeModelText(brand.evidence)
     })).filter((brand) => brand.name) : [];
+    for (const brand of job.brands.slice(0, 8)) {
+      try {
+        const homepage = await searchBrandHomepage(brand.name);
+        if (homepage) brand.url = homepage.url;
+      } catch {
+        // A brand can still be shown without a homepage when Exa is unavailable.
+      }
+    }
     job.products = [];
     for (const candidate of Array.isArray(analysis.products) ? analysis.products : []) {
       job.products.push(await resolveProduct({
@@ -338,6 +402,10 @@ async function processJob(job, input) {
         product_name: normalizeModelText(candidate.product_name),
         evidence: normalizeModelText(candidate.evidence)
       }));
+    }
+    for (const candidate of (Array.isArray(analysis.visual_products) ? analysis.visual_products : []).slice(0, 2)) {
+      const visualProduct = await resolveVisualProduct(candidate);
+      if (visualProduct) job.products.push(visualProduct);
     }
     job.status = job.products.length === 0 || job.products.some((product) => product.status === "review") ? "review" : "ready";
     job.step = job.status === "ready" ? "Ready" : "Needs review";

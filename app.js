@@ -181,9 +181,11 @@ function openSheet(scrap) {
 function openReview(job) {
   const products = (job.products || []).map((product, index) => ({ product, index })).filter(({ product }) => product.status === "review");
   const brands = (job.brands || []).map((brand) => typeof brand === "string" ? brand : brand.name).filter(Boolean);
+  const brandLinks = (job.brands || []).filter((brand) => typeof brand === "object" && brand.name && brand.url);
   sheetContent.innerHTML = `
     <span class="label-brand">Needs review</span>
     ${brands.length ? `<p class="review-reason">Brands detected: ${brands.join(", ")}</p>` : ""}
+    ${brandLinks.length ? `<span class="sheet-links">${brandLinks.map((brand) => `<a href="${brand.url}" target="_blank" rel="noreferrer">Open ${brand.name} homepage -></a>`).join("")}</span>` : ""}
     ${products.length ? products.map(({ product, index }) => `
       <span class="label-name">${product.name || product.product_name || "Possible product match"}</span>
       <span class="label-price">${product.price || "Price unavailable"}</span>
