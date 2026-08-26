@@ -5,8 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const port = Number(process.env.PORT || 8787);
+const host = process.env.HOST || "127.0.0.1";
 const metaBaseUrl = process.env.META_BASE_URL || "https://api.meta.ai/v1";
-const metaModel = process.env.META_VLM_MODEL || "muse-spark-1.1";
+const metaModel = process.env.META_VLM_MODEL || "muse-spark-1.2";
 const JOB_SCHEMA_VERSION = 3;
 const jobs = new Map();
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -36,7 +37,7 @@ function readBody(req) {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 2_000_000) reject(new Error("Request is too large"));
+      if (body.length > 60_000_000) reject(new Error("Request is too large"));
     });
     req.on("end", () => {
       try {
@@ -116,7 +117,7 @@ async function fetchSourceContext(sourceUrl) {
   }
 }
 
-async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
+async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, videoData, videoUrl, pageText }) {
   if (!process.env.META) {
     return { products: [], reason: "META is not configured" };
   }
@@ -129,8 +130,12 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
   const content = [
     {
       type: "input_text",
-      text: `${evidence}\n\nSeparate brand recognition from product identification. Return every clearly supported brand in brands, even if no specific product can be named. Return a product only when the exact product name is readable or explicitly spoken, or when a product label/packaging clearly identifies that exact item. A brand logo alone is brand evidence, not product evidence. A visual category such as bag, shoe, dress, or accessory is not a product name. A caption can mention a theme or comparison brand without being the brand of every item shown. Do not guess, infer, or search for exact products from a brand, aesthetic, silhouette, or generic description. For visual_products, return at most two clearly visible clothing items for visual search. Describe only observable attributes such as clothing type, color, material, pattern, and distinctive details. Do not assign an exact product name. Only include clothing, not bags, shoes, jewelry, or general mood. For product evidence_type use only explicit_product_name or product_label. If no exact product is supported, return products as an empty array. Return only JSON matching the requested schema.`
+      text: `${evidence}\n\nAnalyze the audio and timestamped video frames together. Spoken names, on-screen text, logos, packaging, and the item visible at the same moment are separate evidence signals that may support one another. Separate brand recognition from product identification. Return every clearly supported brand in brands, even if no specific product can be named. Return a product only when the exact product name is readable or explicitly spoken, or when a product label/packaging clearly identifies that exact item. A brand logo alone is brand evidence, not product evidence. A visual category such as bag, shoe, dress, or accessory is not a product name. A caption can mention a theme or comparison brand without being the brand of every item shown. Do not guess, infer, or search for exact products from a brand, aesthetic, silhouette, or generic description. For visual_products, return at most two clearly visible clothing items for visual search. Describe only observable attributes such as clothing type, color, material, pattern, and distinctive details. Do not assign an exact product name. Only include clothing, not bags, shoes, jewelry, or general mood. For product evidence_type use only explicit_product_name or product_label. If no exact product is supported, return products as an empty array. Return only JSON matching the requested schema.`
     },
+    ...(videoData || videoUrl ? [{
+      type: "input_video",
+      video_url: videoData ? `data:video/mp4;base64,${videoData}` : videoUrl
+    }] : []),
     ...(mediaUrls || []).slice(0, 8).map((image_url) => ({ type: "input_image", image_url }))
   ];
 
@@ -379,7 +384,9 @@ async function processJob(job, input) {
     const analysis = await analyzeWithVlm({
       ...input,
       pageText: source.text,
-      mediaUrls: [...(input.mediaUrls || []), ...source.mediaUrls]
+      mediaUrls: [...(input.mediaUrls || []), ...source.mediaUrls],
+      videoData: input.videoData,
+      videoUrl: input.videoUrl
     });
     job.step = "Finding official product pages";
     job.brands = Array.isArray(analysis.brands) ? analysis.brands.map((brand) => ({
@@ -431,8 +438,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/api/scraps") {
     try {
       const input = await readBody(req);
-      if (!input.sourceUrl || !/^https?:\/\//i.test(input.sourceUrl)) return json(res, 400, { error: "A valid sourceUrl is required" });
-      const job = { schemaVersion: JOB_SCHEMA_VERSION, id: randomUUID(), sourceUrl: input.sourceUrl, status: "saved", step: "Saved", brands: [], products: [], createdAt: new Date().toISOString() };
+      const sourceUrl = /^https?:\/\//i.test(input.sourceUrl || "") ? input.sourceUrl : "";
+      const hasSharedMedia = Boolean(input.videoData) || /^https?:\/\//i.test(input.videoUrl || "") || (Array.isArray(input.mediaUrls) && input.mediaUrls.length > 0);
+      if (!sourceUrl && !hasSharedMedia) return json(res, 400, { error: "A Reel URL or shared media is required" });
+      input.sourceUrl = sourceUrl;
+      const job = { schemaVersion: JOB_SCHEMA_VERSION, id: randomUUID(), sourceUrl, status: "saved", step: "Saved", brands: [], products: [], createdAt: new Date().toISOString() };
       jobs.set(job.id, job);
       await persistJobs();
       processJob(job, input);
@@ -467,4 +477,4 @@ const server = http.createServer(async (req, res) => {
   return json(res, 404, { error: "Not found" });
 });
 
-server.listen(port, "127.0.0.1", () => console.log(`Scrap API listening on http://127.0.0.1:${port}`));
+server.listen(port, host, () => console.log(`Scrap API listening on http://${host}:${port}`));

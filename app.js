@@ -129,7 +129,7 @@ function labelMarkup(scrap, includeLinks = true) {
       <span class="sheet-links">
         <a href="${scrap.url}" target="_blank" rel="noreferrer">View product -></a>
         <a href="${scrap.url}" target="_blank" rel="noreferrer">Check availability -></a>
-        <a href="${scrap.source}" target="_blank" rel="noreferrer">View original Reel -></a>
+        ${scrap.source ? `<a href="${scrap.source}" target="_blank" rel="noreferrer">View original Reel -></a>` : ""}
       </span>
     ` : ""}
   `;
@@ -146,7 +146,7 @@ function renderScrap(scrap) {
     <button class="scrap-tap" type="button" aria-label="${scrap.brand} ${scrap.name}">
       <img class="scrap-art" alt="" src="${imageFor(scrap)}">
     </button>
-    <span class="label">${labelMarkup(scrap, false)}<a href="${scrap.url}" target="_blank" rel="noreferrer">View product -></a><a href="${scrap.source}" target="_blank" rel="noreferrer">View original Reel -></a></span>
+    <span class="label">${labelMarkup(scrap, false)}<a href="${scrap.url}" target="_blank" rel="noreferrer">View product -></a>${scrap.source ? `<a href="${scrap.source}" target="_blank" rel="noreferrer">View original Reel -></a>` : ""}</span>
   `;
   item.querySelector(".scrap-tap").addEventListener("click", () => {
     if (window.matchMedia("(max-width: 760px)").matches) {
@@ -195,7 +195,7 @@ function openReview(job) {
       </span>
       ${product.url && product.imageUrl ? `<span class="review-actions"><button type="button" data-review-action="confirm" data-product-index="${index}">Confirm match</button><button type="button" data-review-action="reject" data-product-index="${index}">Not this match</button></span>` : "<p class=\"review-reason\">There is not enough verified product information to approve this item yet.</p>"}
     `).join("") : `<p class="review-reason">No product has enough evidence to approve. You can return to the Reel and save it again after checking the brand or product name.</p>`}
-    <span class="sheet-links"><a href="${job.sourceUrl}" target="_blank" rel="noreferrer">Open original Reel -></a></span>
+    ${job.sourceUrl ? `<span class="sheet-links"><a href="${job.sourceUrl}" target="_blank" rel="noreferrer">Open original Reel -></a></span>` : ""}
   `;
   sheetContent.querySelectorAll("[data-review-action]").forEach((button) => {
     button.addEventListener("click", () => reviewProduct(job, Number(button.dataset.productIndex), button.dataset.reviewAction));
