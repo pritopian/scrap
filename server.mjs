@@ -7,13 +7,14 @@ import { fileURLToPath } from "node:url";
 const port = Number(process.env.PORT || 8787);
 const metaBaseUrl = process.env.META_BASE_URL || "https://api.meta.ai/v1";
 const metaModel = process.env.META_VLM_MODEL || "muse-spark-1.1";
+const JOB_SCHEMA_VERSION = 2;
 const jobs = new Map();
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const jobsFile = path.join(projectRoot, ".scrap-jobs.json");
 
 try {
   const savedJobs = JSON.parse(await readFile(jobsFile, "utf8"));
-  savedJobs.forEach((job) => jobs.set(job.id, job));
+  savedJobs.filter((job) => job.schemaVersion === JOB_SCHEMA_VERSION).forEach((job) => jobs.set(job.id, job));
 } catch {
   // A fresh local install starts with no saved jobs.
 }
@@ -120,7 +121,7 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
   const content = [
     {
       type: "input_text",
-      text: `${evidence}\n\nInspect the supplied image evidence carefully. Identify a product only when its brand or product name is explicitly readable in the caption, on-screen text, audio transcript, packaging, or a clearly readable logo. If an item is only visually recognizable as a bag, shoe, dress, or accessory, do not identify an exact retail product. You may return it as visual_only for review, but visual_only items must never be sent to product search. A caption can mention a theme or comparison brand without being the brand of every item shown. Return only JSON matching the requested schema. Set evidence_type to explicit_text, visible_logo, or visual_only. Do not invent a precise model name.`
+      text: `${evidence}\n\nSeparate brand recognition from product identification. Return every clearly supported brand in brands, even if no specific product can be named. Return a product only when the exact product name is readable or explicitly spoken, or when a product label/packaging clearly identifies that exact item. A brand logo alone is brand evidence, not product evidence. A visual category such as bag, shoe, dress, or accessory is not a product name. A caption can mention a theme or comparison brand without being the brand of every item shown. Do not guess, infer, or search for products from a brand, aesthetic, silhouette, or generic description. For product evidence_type use only explicit_product_name or product_label. If no exact product is supported, return products as an empty array. Return only JSON matching the requested schema.`
     },
     ...(mediaUrls || []).slice(0, 8).map((image_url) => ({ type: "input_image", image_url }))
   ];
@@ -143,6 +144,19 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
           schema: {
             type: "object",
             properties: {
+              brands: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    evidence: { type: "string" },
+                    evidence_type: { type: "string", enum: ["explicit_brand", "visible_logo"] }
+                  },
+                  required: ["name", "evidence", "evidence_type"],
+                  additionalProperties: false
+                }
+              },
               products: {
                 type: "array",
                 items: {
@@ -151,14 +165,14 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
                     brand: { type: "string" },
                     product_name: { type: "string" },
                     evidence: { type: "string" },
-                    evidence_type: { type: "string", enum: ["explicit_text", "visible_logo", "visual_only"] }
+                    evidence_type: { type: "string", enum: ["explicit_product_name", "product_label"] }
                   },
                   required: ["brand", "product_name", "evidence", "evidence_type"],
                   additionalProperties: false
                 }
               }
             },
-            required: ["products"],
+            required: ["brands", "products"],
             additionalProperties: false
           }
         }
@@ -175,7 +189,7 @@ async function analyzeWithVlm({ sourceUrl, caption, mediaUrls, pageText }) {
     .filter((item) => item.type === "output_text")
     .map((item) => item.text)
     .join("");
-  return JSON.parse(outputText || '{"products":[]}');
+  return JSON.parse(outputText || '{"brands":[],"products":[]}');
 }
 
 async function searchOfficialProduct({ brand, productName, product_name }) {
@@ -262,8 +276,8 @@ function extractProductPage(html, fallback) {
 
 async function resolveProduct(candidate) {
   const normalized = { ...candidate, productName: candidate.productName || candidate.product_name };
-  if (!["explicit_text", "visible_logo"].includes(candidate.evidence_type)) {
-    return { ...normalized, status: "review", reason: "Visual item found, but no readable brand or product name was provided" };
+  if (!["explicit_product_name", "product_label"].includes(candidate.evidence_type)) {
+    return { ...normalized, status: "review", reason: "This item does not have exact product evidence" };
   }
   if (!candidate.brand || /^unknown$/i.test(candidate.brand) || !candidate.productName || /^(unknown|unidentified|possible|black|white|red|cream|brown|visual)/i.test(candidate.productName)) {
     return { ...normalized, status: "review", reason: "Brand or product name was not grounded in readable evidence" };
@@ -303,13 +317,16 @@ async function processJob(job, input) {
       mediaUrls: [...(input.mediaUrls || []), ...source.mediaUrls]
     });
     job.step = "Finding official product pages";
+    job.brands = Array.isArray(analysis.brands) ? analysis.brands : [];
     job.products = [];
-    for (const candidate of analysis.products) {
+    for (const candidate of Array.isArray(analysis.products) ? analysis.products : []) {
       job.products.push(await resolveProduct(candidate));
     }
     job.status = job.products.length === 0 || job.products.some((product) => product.status === "review") ? "review" : "ready";
     job.step = job.status === "ready" ? "Ready" : "Needs review";
-    if (job.products.length === 0) job.reason = analysis.reason || "No product had explicit, verifiable brand or product evidence";
+    if (job.products.length === 0) job.reason = job.brands.length
+      ? "Brands were detected, but no exact product names or labels were supported by the Reel"
+      : analysis.reason || "No exact product evidence was found in the Reel";
     await persistJobs();
   } catch (error) {
     job.status = "failed";
@@ -329,7 +346,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const input = await readBody(req);
       if (!input.sourceUrl || !/^https?:\/\//i.test(input.sourceUrl)) return json(res, 400, { error: "A valid sourceUrl is required" });
-      const job = { id: randomUUID(), sourceUrl: input.sourceUrl, status: "saved", step: "Saved", products: [], createdAt: new Date().toISOString() };
+      const job = { schemaVersion: JOB_SCHEMA_VERSION, id: randomUUID(), sourceUrl: input.sourceUrl, status: "saved", step: "Saved", brands: [], products: [], createdAt: new Date().toISOString() };
       jobs.set(job.id, job);
       await persistJobs();
       processJob(job, input);

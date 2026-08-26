@@ -127,9 +127,9 @@ function labelMarkup(scrap, includeLinks = true) {
     <span class="label-price">${scrap.price}</span>
     ${includeLinks ? `
       <span class="sheet-links">
-        <a href="${scrap.url}">View product -></a>
-        <a href="${scrap.url}">Check availability -></a>
-        <a href="${scrap.source}">View original Reel -></a>
+        <a href="${scrap.url}" target="_blank" rel="noreferrer">View product -></a>
+        <a href="${scrap.url}" target="_blank" rel="noreferrer">Check availability -></a>
+        <a href="${scrap.source}" target="_blank" rel="noreferrer">View original Reel -></a>
       </span>
     ` : ""}
   `;
@@ -146,7 +146,7 @@ function renderScrap(scrap) {
     <button class="scrap-tap" type="button" aria-label="${scrap.brand} ${scrap.name}">
       <img class="scrap-art" alt="" src="${imageFor(scrap)}">
     </button>
-    <span class="label">${labelMarkup(scrap, false)}<a href="${scrap.url}">View product -></a><a href="${scrap.source}">View original Reel -></a></span>
+    <span class="label">${labelMarkup(scrap, false)}<a href="${scrap.url}" target="_blank" rel="noreferrer">View product -></a><a href="${scrap.source}" target="_blank" rel="noreferrer">View original Reel -></a></span>
   `;
   item.querySelector(".scrap-tap").addEventListener("click", () => {
     if (window.matchMedia("(max-width: 760px)").matches) {
@@ -180,8 +180,10 @@ function openSheet(scrap) {
 
 function openReview(job) {
   const products = (job.products || []).map((product, index) => ({ product, index })).filter(({ product }) => product.status === "review");
+  const brands = (job.brands || []).map((brand) => typeof brand === "string" ? brand : brand.name).filter(Boolean);
   sheetContent.innerHTML = `
     <span class="label-brand">Needs review</span>
+    ${brands.length ? `<p class="review-reason">Brands detected: ${brands.join(", ")}</p>` : ""}
     ${products.length ? products.map(({ product, index }) => `
       <span class="label-name">${product.name || product.product_name || "Possible product match"}</span>
       <span class="label-price">${product.price || "Price unavailable"}</span>
