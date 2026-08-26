@@ -78,6 +78,14 @@ function cleanText(value = "") {
     .slice(0, 20_000);
 }
 
+function normalizeModelText(value = "") {
+  return String(value)
+    .replace(/\u0000([0-9a-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function fetchSourceContext(sourceUrl) {
   try {
     const response = await fetch(sourceUrl, { redirect: "follow" });
@@ -317,10 +325,19 @@ async function processJob(job, input) {
       mediaUrls: [...(input.mediaUrls || []), ...source.mediaUrls]
     });
     job.step = "Finding official product pages";
-    job.brands = Array.isArray(analysis.brands) ? analysis.brands : [];
+    job.brands = Array.isArray(analysis.brands) ? analysis.brands.map((brand) => ({
+      ...brand,
+      name: normalizeModelText(brand.name),
+      evidence: normalizeModelText(brand.evidence)
+    })).filter((brand) => brand.name) : [];
     job.products = [];
     for (const candidate of Array.isArray(analysis.products) ? analysis.products : []) {
-      job.products.push(await resolveProduct(candidate));
+      job.products.push(await resolveProduct({
+        ...candidate,
+        brand: normalizeModelText(candidate.brand),
+        product_name: normalizeModelText(candidate.product_name),
+        evidence: normalizeModelText(candidate.evidence)
+      }));
     }
     job.status = job.products.length === 0 || job.products.some((product) => product.status === "review") ? "review" : "ready";
     job.step = job.status === "ready" ? "Ready" : "Needs review";
