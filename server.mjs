@@ -221,6 +221,7 @@ async function searchExa(query) {
     const response = await fetch("https://api.exa.ai/search", {
       method: "POST",
       headers: { "x-api-key": process.env.EXA_API_KEY, "content-type": "application/json" },
+      signal: AbortSignal.timeout(12000),
       body: JSON.stringify({
         query,
         type: "auto",
@@ -266,7 +267,7 @@ async function resolveVisualProduct(candidate) {
   const resultImage = typeof result.image === "string" ? result.image : result.image?.url || result.image?.src || "";
   let product = null;
   try {
-    const response = await fetch(result.url, { headers: { "user-agent": "Scrap/0.1 (+visual research)" } });
+    const response = await fetch(result.url, { headers: { "user-agent": "Scrap/0.1 (+visual research)" }, signal: AbortSignal.timeout(8000) });
     if (response.ok) product = extractProductPage(await response.text(), { brand, productName: description, url: result.url });
   } catch {
     // Search-result metadata remains a useful visual suggestion when the page blocks reading.
@@ -354,7 +355,7 @@ async function resolveProduct(candidate) {
   }
   if (!result) return { ...normalized, status: "review", reason: "No official product page found" };
   try {
-    const response = await fetch(result.url, { headers: { "user-agent": "Scrap/0.1 (+product research)" } });
+    const response = await fetch(result.url, { headers: { "user-agent": "Scrap/0.1 (+product research)" }, signal: AbortSignal.timeout(8000) });
     if (!response.ok) {
       const product = extractFromSearchResult(result, normalized);
       return product.imageUrl && product.price !== "Price unavailable"
